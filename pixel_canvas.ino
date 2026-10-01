@@ -1,96 +1,95 @@
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <FastLED.h>
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>Pixel Art</title>
+  <style>
+    * { box-sizing: border-box; touch-action: none; -webkit-user-select: none; }
+    body { background: #111; color: #fff; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; margin: 0; padding: 12px; }
+    #grid { display: grid; grid-template-columns: repeat(16, 1fr); width: 88vw; max-width: 320px; height: 88vw; max-height: 320px; border: 2px solid #444; background: #000; border-radius: 4px; }
+    .cell { border: 1px solid #1a1a1a; background: #000; }
+    .bar { width: 88vw; max-width: 320px; display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+    button { flex: 1; padding: 10px 4px; font-weight: bold; font-size: 13px; border: none; border-radius: 6px; background: #262626; color: #eee; cursor: pointer; }
+    input[type="color"] { width: 44px; height: 44px; border: none; border-radius: 50%; background: none; cursor: pointer; }
+    input[type="range"] { flex: 1; }
+  </style>
+</head>
+<body>
+  <div id="grid"></div>
 
-#define LED_PIN 16
-#define NUM_LEDS 256
+  <!-- Drawing Bar -->
+  <div class="bar">
+    <button id="conn" onclick="connect()" style="background:#00b4d8">Connect</button>
+    <input type="color" id="picker" value="#00ffcc">
+    <button onclick="picker.value='#000000'">Eraser</button>
+    <button onclick="send('CLEAR')" style="background:#e63946">Clear</button>
+  </div>
 
-CRGB leds[NUM_LEDS];
-uint8_t mode = 0; 
-// 0 = draw, 1 = fire, 2 = rainbow
+  <!-- Presets Row 1 -->
+  <div class="bar">
+    <button onclick="send('M,1')">🔥 Flame</button>
+    <button onclick="send('M,2')">🌈 Rainbow</button>
+    <button onclick="send('M,3')">⚡ Matrix</button>
+  </div>
 
-#define SERVICE_UUID "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
-#define RX_UUID      "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
+  <!-- Presets Row 2 -->
+  <div class="bar">
+    <button onclick="send('M,4')">🌌 Stars</button>
+    <button onclick="send('M,5')">🪩 Pulsar</button>
+  </div>
 
-// quadrant position setup
-uint16_t XY(uint8_t x, uint8_t y) {
-  if (x >= 16 || y >= 16) return 0;
-  uint8_t quad = (x < 8 ? 0 : 1) + (y < 8 ? 0 : 2);
-  return (quad * 64) + ((7 - (y % 8)) * 8 + (7 - (x % 8)));
-}
+  <!-- Brightness Slider -->
+  <div class="bar">
+    <span style="font-size:12px; color:#aaa;">Brightness</span>
+    <input type="range" min="2" max="60" value="20" oninput="send('B,'+this.value)">
+  </div>
 
-class RxHandler : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *c) {
-    String s = c->getValue().c_str();
-    if (!s.length()) return;
+  <script>
+    let rx, drawing = false;
+    const enc = new TextEncoder();
+    const grid = document.getElementById('grid');
+    const picker = document.getElementById('picker');
 
-    if (s == "CLEAR") { mode = 0; FastLED.clear(true); }
-    else if (s.startsWith("M,")) { mode = s.substring(2).toInt(); FastLED.clear(true); }
-    else if (s.startsWith("B,")) { FastLED.setBrightness(s.substring(2).toInt()); FastLED.show(); }
-    else {
-
-      // format: x,y,r,g,b
-      int p[4] = {s.indexOf(','), -1, -1, -1};
-      for (int i = 1; i < 4; i++) p[i] = s.indexOf(',', p[i - 1] + 1);
-      if (p[3] > 0) {
-        mode = 0;
-        uint8_t x = s.substring(0, p[0]).toInt();
-        uint8_t y = s.substring(p[0] + 1, p[1]).toInt();
-        uint8_t r = s.substring(p[1] + 1, p[2]).toInt();
-        uint8_t g = s.substring(p[2] + 1, p[3]).toInt();
-        uint8_t b = s.substring(p[3] + 1).toInt();
-        leds[XY(x, y)] = CRGB(r, g, b);
-        FastLED.show();
+    // Build 16x16 grid
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < 16; x++) {
+        let d = document.createElement('div');
+        d.className = 'cell';
+        d.dataset.xy = `${x},${y}`;
+        grid.appendChild(d);
       }
     }
-  }
-};
 
-void runFire() {
-  static byte h[16][16];
-  for (int x = 0; x < 16; x++)
-    for (int y = 15; y >= 2; y--)
-      h[x][y] = (h[x][y - 1] + h[x][y - 2]) / 2;
-  for (int x = 0; x < 16; x++)
-    h[x][0] = random8(160, 255);
-  for (int x = 0; x < 16; x++)
-    for (int y = 0; y < 16; y++)
-      leds[XY(x, 15 - y)] = HeatColor(h[x][y]);
-  FastLED.show();
-  delay(30);
-}
+    async function connect() {
+      try {
+        const dev = await navigator.bluetooth.requestDevice({
+          filters: [{ name: "PixelArt-BLE" }],
+          optionalServices: ["6e400001-b5a3-f393-e0a9-e50e24dcca9e"]
+        });
+        const s = await (await dev.gatt.connect()).getPrimaryService("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
+        rx = await s.getCharacteristic("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
+        document.getElementById('conn').innerText = "Connected";
+        document.getElementById('conn').style.background = "#2a9d8f";
+      } catch (e) {
+        alert("Bluetooth error: " + e);
+      }
+    }
 
-void runRainbow() {
-  static uint8_t hue = 0;
-  for (int x = 0; x < 16; x++)
-    for (int y = 0; y < 16; y++)
-      leds[XY(x, y)] = CHSV(hue + (x + y) * 8, 255, 255);
-  hue += 2;
-  FastLED.show();
-  delay(20);
-}
+    function send(str) {
+      if (rx) rx.writeValueWithoutResponse(enc.encode(str)).catch(() => {});
+      if (str === "CLEAR") document.querySelectorAll('.cell').forEach(c => c.style.backgroundColor = '#000');
+    }
 
-void setup() {
-  FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
-  FastLED.setBrightness(20);
-  FastLED.setMaxPowerInVoltsAndMilliamps(5, 450);
-  FastLED.clear(true);
+    function draw(el) {
+      if (!el || !el.dataset.xy || !rx) return;
+      el.style.backgroundColor = picker.value;
+      let c = picker.value;
+      send(`${el.dataset.xy},${parseInt(c.slice(1,3),16)},${parseInt(c.slice(3,5),16)},${parseInt(c.slice(5,7),16)}`);
+    }
 
-  BLEDevice::init("PixelArt-BLE");
-  BLEServer *pServer = BLEDevice::createServer();
-  BLEService *pService = pServer->createService(SERVICE_UUID);
-  BLECharacteristic *pRx = pService->createCharacteristic(RX_UUID, BLECharacteristic::PROPERTY_WRITE_NR);
-  pRx->setCallbacks(new RxHandler());
-  pService->start();
-
-  BLEAdvertising *pAdv = BLEDevice::getAdvertising();
-  pAdv->addServiceUUID(SERVICE_UUID);
-  pAdv->start();
-}
-
-void loop() {
-  if (mode == 1) runFire();
-  else if (mode == 2) runRainbow();
-  else delay(20);
-}
+    grid.onpointerdown = (e) => { drawing = true; draw(document.elementFromPoint(e.clientX, e.clientY)); };
+    window.onpointerup = () => drawing = false;
+    grid.onpointermove = (e) => { if (drawing) draw(document.elementFromPoint(e.clientX, e.clientY)); };
+  </script>
+</body>
+</html>
